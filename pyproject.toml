@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piper-smolvla"
+version = "0.1.0"
+description = "LeRobot/SmolVLA adapter utilities for AgileX Piper."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+hardware = [
+    "piper-sdk>=0.6",
+    "opencv-python>=4.8",
+]
+# lerobot is not on PyPI; install from source:
+#   pip install -e /path/to/lerobot
+train = [
+    "torch>=2.0",
+    "datasets>=2.14",
+    "safetensors",
+    "transformers",
+    "accelerate",
+    "timm",
+]
+dev = [
+    "pytest>=8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = [
+    "-p", "no:launch_testing",
+    "-p", "no:launch_testing_ros",
+    "-p", "no:launch_testing_ros_pytest_entrypoint",
+    "-p", "no:launch_testing_ament_cmake",
+]
