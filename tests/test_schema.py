@@ -28,13 +28,13 @@ def test_can_topology_defaults_do_not_change_mode():
 
 def test_verified_start_pose_contract():
     assert schema.VERIFIED_START_QPOS == (
-        0.06292,
-        0.00750,
-        -0.00396,
-        0.02732,
-        0.30946,
-        -0.09826,
-        0.0995,
+        0.02430,
+        0.00670,
+        -0.00390,
+        0.01610,
+        0.31150,
+        -0.07480,
+        0.09870,
     )
-    assert schema.START_GUARD_ZONE_ARM_TOLERANCE_RAD == (0.10, 0.10, 0.10, 0.12, 0.12, 0.12)
+    assert schema.START_GUARD_ZONE_ARM_TOLERANCE_RAD == (0.08, 0.08, 0.08, 0.10, 0.08, 0.10)
     assert schema.START_GUARD_GRIPPER_OPEN_MIN_M == 0.09

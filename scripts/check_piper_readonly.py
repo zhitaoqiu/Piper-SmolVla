@@ -14,7 +14,14 @@ import time
 import numpy as np
 
 from piper_smolvla.adapter import PiperSmolVLAAdapter
-from piper_smolvla.real_sources import RealCameraConfig, RealCameraSource, RealPiperStateConfig, RealPiperStateSource
+from piper_smolvla.cameras import (
+    DEFAULT_CAMERA_FPS,
+    DEFAULT_GLOBAL_CAMERA,
+    DEFAULT_WRIST_CAMERA,
+    RealCameraConfig,
+    RealCameraSource,
+)
+from piper_smolvla.real_sources import RealPiperStateConfig, RealPiperStateSource
 from piper_smolvla.schema import DEFAULT_TASK_INSTRUCTION, GLOBAL_IMAGE_KEY, STATE_KEY, WRIST_IMAGE_KEY
 
 
@@ -22,8 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only Piper + camera observation check.")
     parser.add_argument("--allow-hardware-readonly", action="store_true")
     parser.add_argument("--can-port", default="can0")
-    parser.add_argument("--global-camera", required=True)
-    parser.add_argument("--wrist-camera", default="auto")
+    parser.add_argument("--global-camera", default=DEFAULT_GLOBAL_CAMERA)
+    parser.add_argument("--wrist-camera", default=DEFAULT_WRIST_CAMERA)
+    parser.add_argument("--camera-fps", type=int, default=DEFAULT_CAMERA_FPS)
     parser.add_argument("--duration-sec", type=float, default=3.0)
     return parser.parse_args()
 
@@ -44,6 +52,7 @@ def main() -> int:
             allow_hardware_readonly=True,
             global_camera=args.global_camera,
             wrist_camera=args.wrist_camera,
+            fps=args.camera_fps,
         )
     )
     adapter = PiperSmolVLAAdapter(state_source=state_source, image_source=camera_source)
@@ -100,7 +109,7 @@ def print_failure_hint(exc: Exception, args: argparse.Namespace) -> None:
         print("note=script did not call MasterSlaveConfig, reset, enable, or send_action")
     if "no /dev/video" in message:
         print("hint=no camera device found. Check USB connection.")
-        print("fix_1=pass --global-camera /dev/video0 --wrist-camera /dev/video2 explicitly")
+        print(f"fix_1=use project defaults: --global-camera {DEFAULT_GLOBAL_CAMERA} --wrist-camera {DEFAULT_WRIST_CAMERA}")
         print("fix_2=or check that cameras are plugged in and recognized by the kernel (ls /dev/video*)")
     if "cannot open camera" in message or "cannot open v4l2 camera" in message:
         print("hint=camera device exists but could not be opened.")

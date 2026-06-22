@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,11 @@ import numpy as np
 
 from piper_smolvla.schema import ACTION_DIM, ACTION_KEY, GLOBAL_IMAGE_KEY, IMAGE_KEYS, STATE_KEY, WRIST_IMAGE_KEY
 from piper_smolvla.validation import validate_action, validate_state
+
+SMOLVLA_IMAGE_RENAME_MAP = {
+    GLOBAL_IMAGE_KEY: "observation.image",
+    WRIST_IMAGE_KEY: "observation.image2",
+}
 
 
 def prepare_policy_batch(
@@ -142,6 +148,87 @@ class ProcessedPolicy:
             return self.postprocessor(action)
 
 
+VLM_CACHE = os.path.expanduser(
+    "~/.cache/huggingface/hub/models--HuggingFaceTB--SmolVLM2-500M-Video-Instruct/"
+    "snapshots/7b375e1b73b11138ff12fe22c8f2822d8fe03467"
+)
+
+
+def _patch_features_from_checkpoint(cfg: Any, checkpoint_path: Path) -> None:
+    """Overwrite cfg.input_features/output_features from the checkpoint config.json.
+
+    Called BEFORE make_policy() so that LeRobot does not infer features from
+    dataset metadata. Some local datasets were written by an older conversion
+    path whose video features do not include ``names``; recent LeRobot expects
+    that field in ``dataset_to_policy_features``. The checkpoint already stores
+    the correct renamed image keys (observation.image, observation.image2), so
+    using it here is both more stable and consistent with server training.
+
+    This bridges the LeRobot 0.4.4 → 0.5.x compatibility gap: the checkpoint
+    stores features as plain dicts and includes a ``type`` field that
+    SmolVLAConfig no longer accepts.
+    """
+    import json
+
+    from lerobot.configs.types import FeatureType, PolicyFeature
+
+    config_file = checkpoint_path / "config.json"
+    if not config_file.exists():
+        return
+    with open(config_file) as f:
+        raw = json.load(f)
+
+    for key in list(raw.keys()):
+        if key in (
+            "type", "use_amp", "use_peft", "push_to_hub", "repo_id",
+            "private", "tags", "license", "pretrained_path", "rtc_config",
+            "compile_model", "compile_mode", "load_vlm_weights",
+            "add_image_special_tokens",
+        ):
+            del raw[key]
+
+    for key in ("input_features", "output_features"):
+        if key in raw and isinstance(raw[key], dict):
+            raw[key] = {
+                k: PolicyFeature(
+                    type=FeatureType(v["type"]) if isinstance(v["type"], str) else v["type"],
+                    shape=tuple(v["shape"]),
+                )
+                for k, v in raw[key].items()
+            }
+
+    if raw.get("input_features"):
+        cfg.input_features = raw["input_features"]
+    if raw.get("output_features"):
+        cfg.output_features = raw["output_features"]
+
+
+def _ensure_lerobot_feature_names(ds_meta: Any) -> Any:
+    """Fill in missing dataset feature names expected by recent LeRobot.
+
+    Older datasets in this project store video features with CHW shapes but no
+    ``names`` field. Newer LeRobot uses ``names`` to decide whether a visual
+    shape is HWC and raises KeyError if the field is missing. This mutates only
+    the in-memory metadata object used for policy loading.
+    """
+
+    if ds_meta is None or not hasattr(ds_meta, "features"):
+        return ds_meta
+    for feature in ds_meta.features.values():
+        if not isinstance(feature, dict):
+            continue
+        if feature.get("dtype") not in ("image", "video"):
+            continue
+        if feature.get("names") is not None:
+            continue
+        shape = tuple(feature.get("shape") or ())
+        if len(shape) == 3 and shape[-1] in (1, 3, 4):
+            feature["names"] = ["height", "width", "channels"]
+        else:
+            feature["names"] = ["channels", "height", "width"]
+    return ds_meta
+
+
 def load_lerobot_policy(
     checkpoint: str | Path,
     *,
@@ -162,14 +249,45 @@ def load_lerobot_policy(
 
     resolved_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     cfg = make_policy_config(policy_type, pretrained_path=str(path), device=resolved_device, push_to_hub=False)
-    policy = make_policy(cfg, ds_meta=ds_meta)
+    cfg.vlm_model_name = VLM_CACHE
+    cfg.dtype = "float32"
+
+    _patch_features_from_checkpoint(cfg, path)
+    ds_meta = _ensure_lerobot_feature_names(ds_meta)
+    policy = make_policy(cfg, ds_meta=ds_meta, rename_map=SMOLVLA_IMAGE_RENAME_MAP)
     if hasattr(policy, "eval"):
         policy.eval()
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=cfg,
         pretrained_path=str(path),
-        preprocessor_overrides={"device_processor": {"device": resolved_device}},
+        preprocessor_overrides={
+            "device_processor": {"device": resolved_device},
+            "tokenizer_processor": {"tokenizer_name": cfg.vlm_model_name},
+        },
     )
+
+    # The saved checkpoint preprocessor may not include SmolVLA-specific
+    # language tokenization steps (they were added in later lerobot versions).
+    # Insert them if missing so that task strings become language tokens.
+    from lerobot.policies.smolvla.processor_smolvla import SmolVLANewLineProcessor
+    from lerobot.processor.tokenizer_processor import TokenizerProcessorStep
+
+    has_newline = any(isinstance(s, SmolVLANewLineProcessor) for s in preprocessor.steps)
+    has_tokenizer = any(isinstance(s, TokenizerProcessorStep) for s in preprocessor.steps)
+
+    if not has_newline:
+        preprocessor.steps.insert(2, SmolVLANewLineProcessor())
+    if not has_tokenizer:
+        preprocessor.steps.insert(
+            3 if not has_newline else 4,
+            TokenizerProcessorStep(
+                tokenizer_name=cfg.vlm_model_name,
+                max_length=cfg.tokenizer_max_length,
+                padding=cfg.pad_language_to,
+                padding_side="right",
+            ),
+        )
+
     return ProcessedPolicy(policy=policy, preprocessor=preprocessor, postprocessor=postprocessor)
 
 

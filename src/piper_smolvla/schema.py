@@ -31,17 +31,17 @@ DEFAULT_CAN_TOPOLOGY_POLICY = CAN_TOPOLOGY_PRESERVE
 DEFAULT_CALL_MASTER_SLAVE_CONFIG = False
 REFERENCE_FOLLOWER_MASTER_SLAVE_CONFIG = (0xFC, 0, 0, 0)
 
-# 本项目采集默认固定起点，来自此前已验证的 Piper 人工示教起点。
+# 本项目采集默认固定起点，来自 170 条 two-object language 数据采集前验证的 Piper 起点。
 VERIFIED_START_QPOS: tuple[float, ...] = (
-    0.06292,
-    0.00750,
-    -0.00396,
-    0.02732,
-    0.30946,
-    -0.09826,
-    0.0995,
+    0.02430,
+    0.00670,
+    -0.00390,
+    0.01610,
+    0.31150,
+    -0.07480,
+    0.09870,
 )
 
 # 起点 zone guard：J1-J3 稍紧，J4-J6 稍宽，夹爪要求打开。
-START_GUARD_ZONE_ARM_TOLERANCE_RAD: tuple[float, ...] = (0.10, 0.10, 0.10, 0.12, 0.12, 0.12)
+START_GUARD_ZONE_ARM_TOLERANCE_RAD: tuple[float, ...] = (0.08, 0.08, 0.08, 0.10, 0.08, 0.10)
 START_GUARD_GRIPPER_OPEN_MIN_M = 0.09

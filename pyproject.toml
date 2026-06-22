@@ -16,6 +16,9 @@ hardware = [
     "piper-sdk>=0.6",
     "opencv-python>=4.8",
 ]
+realsense = [
+    "pyrealsense2",
+]
 # lerobot is not on PyPI; install from source:
 #   pip install -e /path/to/lerobot
 train = [

@@ -43,6 +43,12 @@ def video_index(device: str) -> int:
 # ── device metadata ──────────────────────────────────────────────────────────
 
 def video_device_name(device: str | Path) -> str:
+    serial = parse_realsense_spec(device)
+    if serial:
+        for info in list_realsense_physical_devices():
+            if info.serial == serial:
+                return f"{info.name} serial={serial}"
+        return f"Intel RealSense serial={serial}"
     dev = Path(normalize_video_device(str(device)))
     try:
         return (Path("/sys/class/video4linux") / dev.name / "name").read_text(encoding="utf-8").strip()
@@ -51,6 +57,12 @@ def video_device_name(device: str | Path) -> str:
 
 
 def video_device_group(device: str | Path) -> str:
+    serial = parse_realsense_spec(device)
+    if serial:
+        for info in list_realsense_physical_devices():
+            if info.serial == serial and info.groups:
+                return ",".join(info.groups)
+        return realsense_spec(serial)
     dev = Path(normalize_video_device(str(device)))
     try:
         resolved = Path(os.path.realpath(Path("/sys/class/video4linux") / dev.name / "device"))
@@ -63,6 +75,8 @@ def video_device_group(device: str | Path) -> str:
 
 
 def is_realsense_device(device: str | Path) -> bool:
+    if parse_realsense_spec(device):
+        return True
     return "realsense" in video_device_name(device).lower()
 
 
@@ -113,6 +127,19 @@ class DeviceProbeInfo:
     status: str = "unprobed"  # unprobed | ok | no_frame | timeout | black | skipped
 
 
+@dataclass(frozen=True)
+class RealSenseDeviceInfo:
+    serial: str
+    name: str = "Intel RealSense"
+    usb_type: str = ""
+    video_nodes: tuple[str, ...] = field(default_factory=tuple)
+    groups: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def spec(self) -> str:
+        return realsense_spec(self.serial)
+
+
 # Per-probe timeout in seconds — a single bad node should never stall for 30 s.
 _PROBE_TIMEOUT_SEC = 2.5
 
@@ -122,6 +149,7 @@ def probe_readable_v4l2_devices(
     black_threshold: float = 5.0,
     warmup_frames: int = 3,
     verbose: bool = True,
+    skip_realsense: bool = True,
 ) -> list[str]:
     """返回可被 OpenCV/V4L2 打开、能正常读帧且非黑帧的 /dev/video*。
 
@@ -131,11 +159,18 @@ def probe_readable_v4l2_devices(
 
     try:
         import cv2
+        import os as _os
+        cv2.setLogLevel(0)
+        _os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
     except Exception:
         return list_video_devices()
 
     working: list[str] = []
     for device in list_video_devices():
+        if skip_realsense and is_realsense_device(device):
+            if verbose:
+                print(f"  {device}  SKIP_REALSENSE  name={video_device_name(device)!r}  group={video_device_group(device)}")
+            continue
         if _is_known_bad(device):
             if verbose:
                 print(f"  {device}  SKIP (cached bad)")
@@ -157,6 +192,7 @@ def probe_readable_v4l2_devices_detailed(
     black_threshold: float = 5.0,
     warmup_frames: int = 3,
     verbose: bool = True,
+    skip_realsense: bool = True,
 ) -> list[DeviceProbeInfo]:
     """同 probe_readable_v4l2_devices，但返回完整 DeviceProbeInfo 列表。"""
 
@@ -169,6 +205,18 @@ def probe_readable_v4l2_devices_detailed(
 
     results: list[DeviceProbeInfo] = []
     for device in list_video_devices():
+        if skip_realsense and is_realsense_device(device):
+            info = DeviceProbeInfo(
+                device=device,
+                status="skipped_realsense",
+                name=video_device_name(device),
+                group=video_device_group(device),
+                realsense=True,
+            )
+            if verbose:
+                _print_probe(info)
+            results.append(info)
+            continue
         if _is_known_bad(device):
             info = DeviceProbeInfo(
                 device=device, status="skipped",
@@ -262,7 +310,7 @@ def _print_probe(info: DeviceProbeInfo) -> None:
     rs_str = "  REALSENSE" if info.realsense else ""
     extras = f"{name_str}{group_str}{rs_str}"
 
-    if info.status in ("timeout", "skipped", "no_frame"):
+    if info.status in ("timeout", "skipped", "skipped_realsense", "no_frame"):
         print(f"  {info.device}  {info.status.upper()}{extras}")
         return
     if info.shape is None:
@@ -304,7 +352,9 @@ def resolve_camera_pair(
         if cache_key in _RESOLVED_CACHE:
             return _RESOLVED_CACHE[cache_key]
 
-        candidates = devices or probe_readable_v4l2_devices(verbose=verbose) or list_video_devices()
+        candidates = devices if devices is not None else auto_camera_candidates(verbose=verbose)
+        if not candidates:
+            candidates = list_video_devices()
         if not candidates:
             raise RuntimeError("no /dev/video* device found; pass explicit --global-camera and --wrist-camera")
 
@@ -363,7 +413,7 @@ def resolve_one_camera(
 
 def camera_auto_rank(device: str, role: str) -> tuple[int, int]:
     name = video_device_name(device).lower()
-    number = video_index(device)
+    number = video_index(device) if _is_video_node(device) else 0
     if role == "global":
         if "5mp" in name or "usb camera" in name:
             return (0, number)
@@ -396,7 +446,83 @@ def _is_explicit(spec: str) -> bool:
     return value not in ("", "auto")
 
 
+def auto_camera_candidates(*, verbose: bool = True) -> list[str]:
+    """Return physical camera candidates without V4L2-probing RealSense nodes."""
+
+    candidates: list[str] = []
+    candidates.extend(probe_readable_v4l2_devices(verbose=verbose, skip_realsense=True))
+    for info in list_realsense_physical_devices():
+        candidates.append(info.spec)
+    return candidates
+
+
 # ── RealSense helpers ────────────────────────────────────────────────────────
+
+_REALSENSE_SPEC_PREFIX = "realsense:"
+
+
+def realsense_spec(serial: str) -> str:
+    return f"{_REALSENSE_SPEC_PREFIX}{serial.strip()}"
+
+
+def parse_realsense_spec(spec: str | Path) -> str | None:
+    value = str(spec).strip()
+    if value.lower().startswith(_REALSENSE_SPEC_PREFIX):
+        return value.split(":", 1)[1].strip() or None
+    return None
+
+
+def _is_video_node(value: str | Path) -> bool:
+    raw = str(value).strip()
+    return raw.startswith("/dev/video") or raw.isdigit()
+
+
+def list_realsense_physical_devices() -> list[RealSenseDeviceInfo]:
+    """List physical RealSense devices via librealsense, with sysfs video nodes."""
+
+    try:
+        import pyrealsense2 as rs
+    except Exception:
+        return []
+
+    try:
+        devices = list(rs.context().query_devices())
+    except Exception:
+        return []
+
+    nodes_by_serial: dict[str, list[str]] = {}
+    groups_by_serial: dict[str, set[str]] = {}
+    for node in list_video_devices():
+        if not is_realsense_device(node):
+            continue
+        serial = realsense_serial_from_video_device(node)
+        if not serial:
+            continue
+        nodes_by_serial.setdefault(serial, []).append(node)
+        groups_by_serial.setdefault(serial, set()).add(video_device_group(node))
+
+    infos: list[RealSenseDeviceInfo] = []
+    for dev in devices:
+        serial = _get_rs_info(dev, rs.camera_info.serial_number)
+        if not serial:
+            continue
+        infos.append(
+            RealSenseDeviceInfo(
+                serial=serial,
+                name=_get_rs_info(dev, rs.camera_info.name) or "Intel RealSense",
+                usb_type=_get_rs_info(dev, rs.camera_info.usb_type_descriptor) or "",
+                video_nodes=tuple(sorted(nodes_by_serial.get(serial, []), key=video_sort_key)),
+                groups=tuple(sorted(groups_by_serial.get(serial, set()))),
+            )
+        )
+    return infos
+
+
+def _get_rs_info(dev: Any, key: Any) -> str:
+    try:
+        return str(dev.get_info(key)).strip()
+    except Exception:
+        return ""
 
 def realsense_fps_candidates(fps: int) -> tuple[int, ...]:
     ordered: list[int] = []
@@ -412,6 +538,9 @@ def realsense_serial_from_video_device(device: str) -> str | None:
     value = device.strip()
     if not value or value.lower() == "auto":
         return None
+    explicit_serial = parse_realsense_spec(value)
+    if explicit_serial:
+        return explicit_serial
     if not value.startswith("/dev/video") and not value.isdigit():
         return value
 

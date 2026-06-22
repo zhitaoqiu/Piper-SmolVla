@@ -2,8 +2,15 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.cache/
 outputs/
+checkpoints/
+wandb/
+*.safetensors
+*.pt
+*.pth
 logs_*.txt
+*.log
 *.egg-info/
 dist/
 build/

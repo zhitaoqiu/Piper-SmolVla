@@ -3,6 +3,13 @@
 
 真实采集是 operator demonstration/read-only recording：只读 Piper qpos 和双摄，
 按本项目镜像示教语义写 observation.state=prev_qpos、action=current_qpos。
+
+Paired collection (--paired):
+  同一场景下交替采集两条 demo，prompt 不同、动作不同，迫使模型学会读语言指令。
+  例：左绿右蓝场景
+    ep 0: "Pick up the green object..." → 操作者抓绿色
+    ep 1: "Pick up the blue object..."  → 操作者抓蓝色
+  模型看到相同画面但不同 prompt → 不同动作，prompt 成为唯一区分信号。
 """
 
 from __future__ import annotations
@@ -30,7 +37,15 @@ from piper_smolvla.collection import (
     write_episode,
 )
 from piper_smolvla.config import PiperSmolVLAAdapterConfig
-from piper_smolvla.real_sources import RealCameraConfig, RealCameraSource, RealPiperStateConfig, RealPiperStateSource
+from piper_smolvla.cameras import (
+    DEFAULT_CAMERA_FPS,
+    DEFAULT_DATASET_FPS,
+    DEFAULT_GLOBAL_CAMERA,
+    DEFAULT_WRIST_CAMERA,
+    RealCameraConfig,
+    RealCameraSource,
+)
+from piper_smolvla.real_sources import RealPiperStateConfig, RealPiperStateSource
 from piper_smolvla.schema import (
     DEFAULT_TASK_INSTRUCTION,
     GLOBAL_IMAGE_KEY,
@@ -42,13 +57,26 @@ from piper_smolvla.schema import (
 )
 from piper_smolvla.validation import validate_state
 
+BLUE_TASK = "Pick up the blue object and put it into the box."
+GREEN_TASK = "Pick up the green object and put it into the box."
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Piper SmolVLA read-only operator demonstrations.")
     parser.add_argument("--allow-hardware-readonly", action="store_true")
     parser.add_argument("--can-port", default="can0")
-    parser.add_argument("--global-camera", default="auto")
-    parser.add_argument("--wrist-camera", default="auto")
+    parser.add_argument("--global-camera", default=DEFAULT_GLOBAL_CAMERA)
+    parser.add_argument("--wrist-camera", default=DEFAULT_WRIST_CAMERA)
+    parser.add_argument("--wrist-auto-exposure", type=int, default=None,
+                        help="Wrist camera auto exposure: 1=on, 0=off.")
+    parser.add_argument("--wrist-exposure", type=int, default=None,
+                        help="Wrist camera manual exposure value.")
+    parser.add_argument("--wrist-gain", type=float, default=None,
+                        help="Wrist camera gain/ISO; higher is brighter and noisier.")
+    parser.add_argument("--wrist-brightness", type=float, default=None,
+                        help="Wrist camera brightness offset.")
+    parser.add_argument("--wrist-power-line", type=int, default=None,
+                        help="Wrist camera power line frequency: 1=50Hz, 2=60Hz.")
     parser.add_argument("--output", default="")
     parser.add_argument(
         "--overwrite-output",
@@ -57,9 +85,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--repo-id", default="piper/smolvla_cube_dual")
     parser.add_argument("--task", default=DEFAULT_TASK_INSTRUCTION)
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help=(
+            "Paired collection mode: alternate between green and blue task prompts "
+            "for the SAME scene. --episodes must be even. "
+            "Overrides --task."
+        ),
+    )
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--fps", type=int, default=10, help="Dataset recording FPS.")
-    parser.add_argument("--camera-fps", type=int, default=30, help="Camera capture FPS.")
+    parser.add_argument("--fps", type=int, default=DEFAULT_DATASET_FPS, help="Dataset recording FPS.")
+    parser.add_argument("--camera-fps", type=int, default=DEFAULT_CAMERA_FPS, help="Camera capture FPS.")
     parser.add_argument("--operator-demo", action="store_true")
     parser.add_argument("--require-keyboard-start-stop", action="store_true")
     parser.add_argument("--max-duration-sec", type=float, default=60.0)
@@ -87,10 +124,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_task_list(args: argparse.Namespace) -> list[str]:
+    if args.paired:
+        return [GREEN_TASK, BLUE_TASK]
+    return [t.strip() for t in args.task.split(",") if t.strip()]
+
+
 def main() -> int:
     args = parse_args()
     if args.episodes <= 0:
         raise SystemExit("--episodes must be positive")
+    task_list = resolve_task_list(args)
+    if args.paired and (args.episodes % 2) != 0:
+        raise SystemExit("--paired requires an even number of --episodes")
+    if args.paired:
+        print(f"paired_collection=True  tasks={task_list}")
+    elif len(task_list) > 1:
+        print(f"task_list={task_list}  (cycling through {len(task_list)} tasks)")
     if not args.operator_demo:
         raise SystemExit("--operator-demo is required; scripted robot motion is not supported here")
     if not args.require_keyboard_start_stop:
@@ -108,7 +158,7 @@ def main() -> int:
             print(f"global_camera_device={adapter.image_source.resolved_global}")
             print(f"wrist_camera_device={adapter.image_source.resolved_wrist}")
         print("read-only observation check ...")
-        obs = adapter.read_observation(task=args.task)
+        obs = adapter.read_observation(task=task_list[0])
         print(f"state={list(obs[STATE_KEY])}")
         print(f"global_ok shape={tuple(np.asarray(obs[GLOBAL_IMAGE_KEY]).shape)}")
         print(f"wrist_ok shape={tuple(np.asarray(obs[WRIST_IMAGE_KEY]).shape)}")
@@ -131,24 +181,26 @@ def main() -> int:
                 repo_id=args.repo_id,
                 config=CollectionConfig(
                     fps=args.fps,
-                    task=args.task,
+                    task=task_list[0],
                     image_shapes_chw=image_shapes_from_observation(obs),
                 ),
             )
 
         for episode in range(args.episodes):
+            current_task = task_list[episode % len(task_list)]
+            print(f"\n── ep {episode}/{args.episodes}  task=\"{current_task}\" ──")
             wait_until_start_pose(
                 adapter,
                 args=args,
-                task=args.task,
+                task=current_task,
                 start_state=start_state,
                 episode=episode,
                 preview=preview,
             )
-            start_obs = wait_for_operator_start(adapter, task=args.task, episode=episode, preview=preview)
+            start_obs = wait_for_operator_start(adapter, task=current_task, episode=episode, preview=preview)
             frames = record_episode(
                 adapter,
-                task=args.task,
+                task=current_task,
                 fps=args.fps,
                 max_duration_sec=args.max_duration_sec,
                 preview=preview,
@@ -165,6 +217,7 @@ def main() -> int:
                     args=args,
                     frame_count=len(frames),
                     start_state=start_state,
+                    task=current_task,
                 )
             else:
                 print("dry-run/no-output: episode not written")
@@ -201,6 +254,11 @@ def build_adapter(args: argparse.Namespace) -> tuple[PiperSmolVLAAdapter, Callab
                 global_camera=args.global_camera,
                 wrist_camera=args.wrist_camera,
                 fps=args.camera_fps,
+                wrist_auto_exposure=args.wrist_auto_exposure,
+                wrist_exposure_absolute=args.wrist_exposure,
+                wrist_gain=args.wrist_gain,
+                wrist_brightness=args.wrist_brightness,
+                wrist_power_line_frequency=args.wrist_power_line,
             )
         )
 
@@ -390,7 +448,8 @@ def wait_until_start_pose(
     episode: int,
     preview: CollectionPreview,
 ) -> None:
-    print(f"Episode {episode}: move robot to fixed start pose. Live preview is shown if GUI is available.")
+    print(f"Episode {episode}: checking start pose... target={list(start_state)}")
+    attempts = 0
     last_print = 0.0
     while True:
         obs = adapter.read_observation(task=task)
@@ -407,14 +466,18 @@ def wait_until_start_pose(
             f"EP {episode} START GUARD {'OK' if ok else 'WAIT'} | "
             f"max joint diff {max_joint_diff:.4f} | grip diff {diffs[6]:.4f}"
         )
+        if ok:
+            status += f"\nTASK: {task}"
         key = preview.show(obs, status=status)
         if key in (ord("q"), ord("Q"), 27):
             raise KeyboardInterrupt("collection aborted from preview window")
         now = time.monotonic()
-        if now - last_print > 1.0:
+        # always print on first check, then throttle to 1 Hz
+        if attempts == 0 or now - last_print > 1.0:
             print(
                 f"episode={episode} start_guard_ok={ok} "
-                f"max_joint_diff={max_joint_diff:.6f} gripper_diff={diffs[6]:.6f}"
+                f"max_joint_diff={max_joint_diff:.6f} gripper_diff={diffs[6]:.6f} "
+                f"current={[f'{v:.4f}' for v in current]}"
             )
             if args.start_guard_mode == "zone":
                 print(
@@ -422,7 +485,10 @@ def wait_until_start_pose(
                     f"zone_gripper_need_open_min={START_GUARD_GRIPPER_OPEN_MIN_M:.6f}"
                 )
             last_print = now
+        attempts += 1
         if ok:
+            # brief pause so operator can read the OK status and task prompt
+            time.sleep(0.5)
             return
         if stdin_has_line():
             sys.stdin.readline()
@@ -465,7 +531,7 @@ def record_episode(
     frames: list[dict] = []
     previous = initial_observation or adapter.read_observation(task=task)
     deadline = time.monotonic() + max_duration_sec
-    print("recording... press ENTER in terminal or SPACE/ENTER in preview to stop")
+    print(f"recording... task=\"{task}\"  press ENTER in terminal or SPACE/ENTER in preview to stop")
     while time.monotonic() < deadline:
         t0 = time.monotonic()
         current = adapter.read_observation(task=task)
@@ -477,7 +543,7 @@ def record_episode(
                 task=task,
             )
         )
-        key = preview.show(current, status="RECORDING read-only operator demo", frame_count=len(frames))
+        key = preview.show(current, status=f"RECORDING read-only operator demo\nTASK: {task}", frame_count=len(frames))
         if key in (ord("q"), ord("Q"), 27):
             raise KeyboardInterrupt("collection aborted from preview window")
         if key in (ord(" "), 10, 13):
@@ -504,7 +570,7 @@ def wait_for_operator_start(
     print(f"Episode {episode}: start pose ok; press ENTER in terminal or SPACE/ENTER in preview to start recording")
     while True:
         obs = adapter.read_observation(task=task)
-        key = preview.show(obs, status=f"EP {episode} READY: press SPACE/ENTER to record")
+        key = preview.show(obs, status=f"EP {episode} READY: press SPACE/ENTER to record\nTASK: {task}")
         if key in (ord(" "), 10, 13):
             return obs
         if key in (ord("q"), ord("Q"), 27):
@@ -522,11 +588,12 @@ def save_episode_metadata(
     args: argparse.Namespace,
     frame_count: int,
     start_state: tuple[float, ...],
+    task: str,
 ) -> None:
     metadata_dir = root / "meta" / "piper_smolvla_episode_metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
-        "task": args.task,
+        "task": task,
         "camera_keys": [GLOBAL_IMAGE_KEY, WRIST_IMAGE_KEY],
         "state_dim": 7,
         "action_dim": 7,

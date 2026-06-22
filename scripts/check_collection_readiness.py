@@ -22,7 +22,14 @@ from piper_smolvla.collection import (
     make_readonly_transition_frame,
     write_episode,
 )
-from piper_smolvla.real_sources import RealCameraConfig, RealCameraSource, RealPiperStateConfig, RealPiperStateSource
+from piper_smolvla.cameras import (
+    DEFAULT_CAMERA_FPS,
+    DEFAULT_GLOBAL_CAMERA,
+    DEFAULT_WRIST_CAMERA,
+    RealCameraConfig,
+    RealCameraSource,
+)
+from piper_smolvla.real_sources import RealPiperStateConfig, RealPiperStateSource
 from piper_smolvla.schema import DEFAULT_TASK_INSTRUCTION, GLOBAL_IMAGE_KEY, STATE_KEY, WRIST_IMAGE_KEY
 
 
@@ -30,8 +37,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check Piper SmolVLA collection readiness.")
     parser.add_argument("--allow-hardware-readonly", action="store_true")
     parser.add_argument("--can-port", default="can0")
-    parser.add_argument("--global-camera", default="auto")
-    parser.add_argument("--wrist-camera", default="auto")
+    parser.add_argument("--global-camera", default=DEFAULT_GLOBAL_CAMERA)
+    parser.add_argument("--wrist-camera", default=DEFAULT_WRIST_CAMERA)
+    parser.add_argument("--camera-fps", type=int, default=DEFAULT_CAMERA_FPS)
+    parser.add_argument("--wrist-auto-exposure", type=int, default=None,
+                        help="Wrist camera auto exposure: 1=on, 0=off.")
+    parser.add_argument("--wrist-exposure", type=int, default=None,
+                        help="Wrist camera manual exposure value.")
+    parser.add_argument("--wrist-gain", type=float, default=None,
+                        help="Wrist camera gain/ISO; higher is brighter and noisier.")
+    parser.add_argument("--wrist-brightness", type=float, default=None,
+                        help="Wrist camera brightness offset.")
+    parser.add_argument("--wrist-power-line", type=int, default=None,
+                        help="Wrist camera power line frequency: 1=50Hz, 2=60Hz.")
     parser.add_argument("--duration-sec", type=float, default=5.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--write-smoke-output", default="")
@@ -121,6 +139,12 @@ def build_adapter(args: argparse.Namespace):
                 allow_hardware_readonly=True,
                 global_camera=args.global_camera,
                 wrist_camera=args.wrist_camera,
+                fps=args.camera_fps,
+                wrist_auto_exposure=args.wrist_auto_exposure,
+                wrist_exposure_absolute=args.wrist_exposure,
+                wrist_gain=args.wrist_gain,
+                wrist_brightness=args.wrist_brightness,
+                wrist_power_line_frequency=args.wrist_power_line,
             )
         )
         return (

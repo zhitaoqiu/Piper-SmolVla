@@ -48,7 +48,7 @@ def main() -> int:
         print("NO HARDWARE ACCESS")
         return 0
 
-    from lerobot.datasets import LeRobotDataset
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = Path(args.dataset)
     dataset = LeRobotDataset(f"piper/{root.name}", root=str(root), tolerance_s=0.5)
