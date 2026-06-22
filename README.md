@@ -122,6 +122,26 @@ Useful defaults:
 The collector writes LeRobot v3-style data and stores collection metadata under the
 dataset root. The `data/` directory is ignored by Git on purpose.
 
+## Sample Dataset
+
+This repository includes a small real-data sample at:
+
+```text
+sample_data/two_obj_language_200_sample10
+```
+
+It contains 10 real episodes from the blue/green two-object collection:
+
+- 5 blue-object episodes
+- 5 green-object episodes
+- 2126 frames
+- 20 FPS
+- dual-camera videos for `observation.images.global_rgb` and `observation.images.wrist_rgb`
+- LeRobot-style `data/`, `meta/`, and `videos/` directories
+
+The full local dataset is intentionally not committed because it is much larger. Use
+the sample for repository inspection, schema checks, and lightweight loader tests.
+
 ## Training on the 4090 Server
 
 The training wrapper expects a 4090 workspace layout like:

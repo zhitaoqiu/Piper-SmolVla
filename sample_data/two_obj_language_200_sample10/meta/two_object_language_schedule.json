@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "created_at": "2026-06-22T02:14:21.657742+00:00",
+  "seed": 42,
+  "num_blue": 5,
+  "num_green": 5,
+  "total": 10,
+  "prompts": {
+    "blue": "Pick up the blue object and put it into the box.",
+    "green": "Pick up the green object and put it into the box."
+  },
+  "targets": [
+    "blue",
+    "green",
+    "green",
+    "green",
+    "green",
+    "green",
+    "blue",
+    "blue",
+    "blue",
+    "blue"
+  ],
+  "tasks": [
+    {
+      "schedule_index": 0,
+      "target": "blue",
+      "task": "Pick up the blue object and put it into the box."
+    },
+    {
+      "schedule_index": 1,
+      "target": "green",
+      "task": "Pick up the green object and put it into the box."
+    },
+    {
+      "schedule_index": 2,
+      "target": "green",
+      "task": "Pick up the green object and put it into the box."
+    },
+    {
+      "schedule_index": 3,
+      "target": "green",
+      "task": "Pick up the green object and put it into the box."
+    },
+    {
+      "schedule_index": 4,
+      "target": "green",
+      "task": "Pick up the green object and put it into the box."
+    },
+    {
+      "schedule_index": 5,
+      "target": "green",
+      "task": "Pick up the green object and put it into the box."
+    },
+    {
+      "schedule_index": 6,
+      "target": "blue",
+      "task": "Pick up the blue object and put it into the box."
+    },
+    {
+      "schedule_index": 7,
+      "target": "blue",
+      "task": "Pick up the blue object and put it into the box."
+    },
+    {
+      "schedule_index": 8,
+      "target": "blue",
+      "task": "Pick up the blue object and put it into the box."
+    },
+    {
+      "schedule_index": 9,
+      "target": "blue",
+      "task": "Pick up the blue object and put it into the box."
+    }
+  ],
+  "note": "Saved before the first episode; resume must reuse this file without reshuffling.",
+  "source_dataset": "data/two_obj_language_200",
+  "source_total_episodes": 170,
+  "sample_note": "Small GitHub sample containing the first 10 real episodes only; full dataset is intentionally not committed."
+}
