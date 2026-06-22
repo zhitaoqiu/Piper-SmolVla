@@ -7,6 +7,13 @@ RealSense rig and language-conditioned manipulation data.
 The project keeps the robot interface, camera interface, dataset schema, and rollout
 safety gates explicit so that collection and deployment use the same assumptions.
 
+## Demo Preview
+
+Real dual-camera demonstration from the sample dataset, showing the target behavior
+that the SmolVLA policy is trained to reproduce.
+
+![Piper two-object language demonstration](assets/readme/two_object_episode0_demo.gif)
+
 ## What This Repo Contains
 
 | Area | Purpose |
